@@ -1,11 +1,10 @@
 import { PrismaRepository } from '@api/repository/repository.service';
 import { WAMonitoringService } from '@api/services/monitor.service';
-import { CreateQueueCommand, DeleteQueueCommand, ListQueuesCommand, SQS } from '@aws-sdk/client-sqs';
+import { SQS } from '@aws-sdk/client-sqs';
 import { configService, Log, Sqs } from '@config/env.config';
 import { Logger } from '@config/logger.config';
 
 import { EmitData, EventController, EventControllerInterface } from '../event.controller';
-import { EventDto } from '../event.dto';
 
 export class SqsController extends EventController implements EventControllerInterface {
   private sqs: SQS;
@@ -44,39 +43,6 @@ export class SqsController extends EventController implements EventControllerInt
 
   public get channel(): SQS {
     return this.sqs;
-  }
-
-  override async set(instanceName: string, data: EventDto): Promise<any> {
-    if (!this.status) {
-      return;
-    }
-
-    if (!data[this.name]?.enabled) {
-      data[this.name].events = [];
-    } else {
-      if (0 === data[this.name].events.length) {
-        data[this.name].events = EventController.events;
-      }
-    }
-
-    await this.saveQueues(instanceName, data[this.name].events, data[this.name]?.enabled);
-
-    const payload: any = {
-      where: {
-        instanceId: this.monitor.waInstances[instanceName].instanceId,
-      },
-      update: {
-        enabled: data[this.name]?.enabled,
-        events: data[this.name].events,
-      },
-      create: {
-        enabled: data[this.name]?.enabled,
-        events: data[this.name].events,
-        instanceId: this.monitor.waInstances[instanceName].instanceId,
-      },
-    };
-    console.log('*** payload: ', payload);
-    return this.prisma[this.name].upsert(payload);
   }
 
   public async emit({
@@ -155,92 +121,70 @@ export class SqsController extends EventController implements EventControllerInt
     }
   }
 
-  private async saveQueues(instanceName: string, events: string[], enable: boolean) {
-    if (enable) {
-      const eventsFinded = await this.listQueuesByInstance(instanceName);
-      console.log('eventsFinded', eventsFinded);
+  public async initQueues(instanceName: string, events: string[]) {
+    if (!events || !events.length) return;
 
-      for (const event of events) {
-        const normalizedEvent = event.toLowerCase();
+    const queues = events.map((event) => {
+      return `${event.replace(/_/g, '_').toLowerCase()}`;
+    });
 
-        if (eventsFinded.includes(normalizedEvent)) {
-          this.logger.info(`A queue para o evento "${normalizedEvent}" já existe. Ignorando criação.`);
-          continue;
-        }
+    queues.forEach((event) => {
+      const queueName = `${instanceName}_${event}.fifo`;
 
-        const queueName = `${instanceName}_${normalizedEvent}.fifo`;
-
-        try {
-          const createCommand = new CreateQueueCommand({
-            QueueName: queueName,
-            Attributes: {
-              FifoQueue: 'true',
-            },
-          });
-          const data = await this.sqs.send(createCommand);
-          this.logger.info(`Queue ${queueName} criada: ${data.QueueUrl}`);
-        } catch (err: any) {
-          this.logger.error(`Erro ao criar queue ${queueName}: ${err.message}`);
-        }
-      }
-    }
+      this.sqs.createQueue(
+        {
+          QueueName: queueName,
+          Attributes: {
+            FifoQueue: 'true',
+          },
+        },
+        (err, data) => {
+          if (err) {
+            this.logger.error(`Error creating queue ${queueName}: ${err.message}`);
+          } else {
+            this.logger.info(`Queue ${queueName} created: ${data.QueueUrl}`);
+          }
+        },
+      );
+    });
   }
 
-  private async listQueuesByInstance(instanceName: string) {
-    let existingQueues: string[] = [];
-    try {
-      const listCommand = new ListQueuesCommand({
-        QueueNamePrefix: `${instanceName}_`,
-      });
-      const listData = await this.sqs.send(listCommand);
-      if (listData.QueueUrls && listData.QueueUrls.length > 0) {
-        // Extrai o nome da fila a partir da URL
-        existingQueues = listData.QueueUrls.map((queueUrl) => {
-          const parts = queueUrl.split('/');
-          return parts[parts.length - 1];
-        });
-      }
-    } catch (error: any) {
-      this.logger.error(`Erro ao listar filas para a instância ${instanceName}: ${error.message}`);
-      return;
-    }
+  public async removeQueues(instanceName: string, events: any) {
+    const eventsArray = Array.isArray(events) ? events.map((event) => String(event)) : [];
+    if (!events || !eventsArray.length) return;
 
-    // Mapeia os eventos já existentes nas filas: remove o prefixo e o sufixo ".fifo"
-    return existingQueues
-      .map((queueName) => {
-        // Espera-se que o nome seja `${instanceName}_${event}.fifo`
-        if (queueName.startsWith(`${instanceName}_`) && queueName.endsWith('.fifo')) {
-          return queueName.substring(instanceName.length + 1, queueName.length - 5).toLowerCase();
-        }
-        return '';
-      })
-      .filter((event) => event !== '');
-  }
+    const queues = eventsArray.map((event) => {
+      return `${event.replace(/_/g, '_').toLowerCase()}`;
+    });
 
-  // Para uma futura feature de exclusão forçada das queues
-  private async removeQueuesByInstance(instanceName: string) {
-    try {
-      const listCommand = new ListQueuesCommand({
-        QueueNamePrefix: `${instanceName}_`,
-      });
-      const listData = await this.sqs.send(listCommand);
+    queues.forEach((event) => {
+      const queueName = `${instanceName}_${event}.fifo`;
 
-      if (!listData.QueueUrls || listData.QueueUrls.length === 0) {
-        this.logger.info(`No queues found for instance ${instanceName}`);
-        return;
-      }
+      this.sqs.getQueueUrl(
+        {
+          QueueName: queueName,
+        },
+        (err, data) => {
+          if (err) {
+            this.logger.error(`Error getting queue URL for ${queueName}: ${err.message}`);
+          } else {
+            const queueUrl = data.QueueUrl;
 
-      for (const queueUrl of listData.QueueUrls) {
-        try {
-          const deleteCommand = new DeleteQueueCommand({ QueueUrl: queueUrl });
-          await this.sqs.send(deleteCommand);
-          this.logger.info(`Queue ${queueUrl} deleted`);
-        } catch (err: any) {
-          this.logger.error(`Error deleting queue ${queueUrl}: ${err.message}`);
-        }
-      }
-    } catch (err: any) {
-      this.logger.error(`Error listing queues for instance ${instanceName}: ${err.message}`);
-    }
+            this.sqs.deleteQueue(
+              {
+                QueueUrl: queueUrl,
+              },
+              (deleteErr) => {
+                if (deleteErr) {
+                  this.logger.error(`Error deleting queue ${queueName}: ${deleteErr.message}`);
+                } else {
+                  this.logger.info(`Queue ${queueName} deleted`);
+                }
+              },
+            );
+          }
+        },
+      );
+    });
   }
 }

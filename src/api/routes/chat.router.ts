@@ -46,19 +46,14 @@ export class ChatRouter extends RouterBroker {
     super();
     this.router
       .post(this.routerPath('whatsappNumbers'), ...guards, async (req, res) => {
-        try {
-          const response = await this.dataValidate<WhatsAppNumberDto>({
-            request: req,
-            schema: whatsappNumberSchema,
-            ClassRef: WhatsAppNumberDto,
-            execute: (instance, data) => chatController.whatsappNumber(instance, data),
-          });
+        const response = await this.dataValidate<WhatsAppNumberDto>({
+          request: req,
+          schema: whatsappNumberSchema,
+          ClassRef: WhatsAppNumberDto,
+          execute: (instance, data) => chatController.whatsappNumber(instance, data),
+        });
 
-          return res.status(HttpStatus.OK).json(response);
-        } catch (error) {
-          console.log(error);
-          return res.status(HttpStatus.BAD_REQUEST).json(error);
-        }
+        return res.status(HttpStatus.OK).json(response);
       })
       .post(this.routerPath('markMessageAsRead'), ...guards, async (req, res) => {
         const response = await this.dataValidate<ReadMessageDto>({
@@ -191,16 +186,6 @@ export class ChatRouter extends RouterBroker {
 
         return res.status(HttpStatus.OK).json(response);
       })
-      .get(this.routerPath('findChatByRemoteJid'), ...guards, async (req, res) => {
-        const instance = req.params as unknown as InstanceDto;
-        const { remoteJid } = req.query as unknown as { remoteJid: string };
-        if (!remoteJid) {
-          return res.status(HttpStatus.BAD_REQUEST).json({ error: 'remoteJid is a required query parameter' });
-        }
-        const response = await chatController.findChatByRemoteJid(instance, remoteJid);
-
-        return res.status(HttpStatus.OK).json(response);
-      })
       // Profile routes
       .post(this.routerPath('fetchBusinessProfile'), ...guards, async (req, res) => {
         const response = await this.dataValidate<ProfilePictureDto>({
@@ -222,6 +207,7 @@ export class ChatRouter extends RouterBroker {
 
         return res.status(HttpStatus.OK).json(response);
       })
+
       .post(this.routerPath('updateProfileName'), ...guards, async (req, res) => {
         const response = await this.dataValidate<ProfileNameDto>({
           request: req,

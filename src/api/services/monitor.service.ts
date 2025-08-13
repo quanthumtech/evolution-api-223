@@ -7,7 +7,7 @@ import { CacheConf, Chatwoot, ConfigService, Database, DelInstance, ProviderSess
 import { Logger } from '@config/logger.config';
 import { INSTANCE_DIR, STORE_DIR } from '@config/path.config';
 import { NotFoundException } from '@exceptions';
-import { execFileSync } from 'child_process';
+import { execSync } from 'child_process';
 import EventEmitter2 from 'eventemitter2';
 import { rmSync } from 'fs';
 import { join } from 'path';
@@ -91,7 +91,6 @@ export class WAMonitoringService {
         Chatwoot: true,
         Proxy: true,
         Rabbitmq: true,
-        Nats: true,
         Sqs: true,
         Websocket: true,
         Setting: true,
@@ -169,8 +168,7 @@ export class WAMonitoringService {
 
   public async cleaningStoreData(instanceName: string) {
     if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED) {
-      const instancePath = join(STORE_DIR, 'chatwoot', instanceName);
-      execFileSync('rm', ['-rf', instancePath]);
+      execSync(`rm -rf ${join(STORE_DIR, 'chatwoot', instanceName + '*')}`);
     }
 
     const instance = await this.prismaRepository.instance.findFirst({
@@ -192,7 +190,6 @@ export class WAMonitoringService {
     await this.prismaRepository.chatwoot.deleteMany({ where: { instanceId: instance.id } });
     await this.prismaRepository.proxy.deleteMany({ where: { instanceId: instance.id } });
     await this.prismaRepository.rabbitmq.deleteMany({ where: { instanceId: instance.id } });
-    await this.prismaRepository.nats.deleteMany({ where: { instanceId: instance.id } });
     await this.prismaRepository.sqs.deleteMany({ where: { instanceId: instance.id } });
     await this.prismaRepository.integrationSession.deleteMany({ where: { instanceId: instance.id } });
     await this.prismaRepository.typebot.deleteMany({ where: { instanceId: instance.id } });

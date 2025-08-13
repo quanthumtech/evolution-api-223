@@ -1,86 +1,21 @@
 import { PrismaRepository } from '@api/repository/repository.service';
 import { WAMonitoringService } from '@api/services/monitor.service';
 import { Auth, ConfigService, HttpServer, Typebot } from '@config/env.config';
+import { Logger } from '@config/logger.config';
 import { Instance, IntegrationSession, Message, Typebot as TypebotModel } from '@prisma/client';
 import { getConversationMessage } from '@utils/getConversationMessage';
 import { sendTelemetry } from '@utils/sendTelemetry';
 import axios from 'axios';
 
-import { BaseChatbotService } from '../../base-chatbot.service';
-import { OpenaiService } from '../../openai/services/openai.service';
-
-export class TypebotService extends BaseChatbotService<TypebotModel, any> {
-  private openaiService: OpenaiService;
-
+export class TypebotService {
   constructor(
-    waMonitor: WAMonitoringService,
-    configService: ConfigService,
-    prismaRepository: PrismaRepository,
-    openaiService: OpenaiService,
-  ) {
-    super(waMonitor, prismaRepository, 'TypebotService', configService);
-    this.openaiService = openaiService;
-  }
+    private readonly waMonitor: WAMonitoringService,
+    private readonly configService: ConfigService,
+    private readonly prismaRepository: PrismaRepository,
+  ) {}
 
-  /**
-   * Get the bot type identifier
-   */
-  protected getBotType(): string {
-    return 'typebot';
-  }
+  private readonly logger = new Logger('TypebotService');
 
-  /**
-   * Base class wrapper - calls the original processTypebot method
-   */
-  protected async sendMessageToBot(
-    instance: any,
-    session: IntegrationSession,
-    settings: any,
-    bot: TypebotModel,
-    remoteJid: string,
-    pushName: string,
-    content: string,
-    msg?: any,
-  ): Promise<void> {
-    // Map the base class call to the original processTypebot method
-    await this.processTypebot(
-      instance,
-      remoteJid,
-      msg,
-      session,
-      bot,
-      bot.url,
-      settings.expire,
-      bot.typebot,
-      settings.keywordFinish,
-      settings.delayMessage,
-      settings.unknownMessage,
-      settings.listeningFromMe,
-      settings.stopBotFromMe,
-      settings.keepOpen,
-      content,
-    );
-  }
-
-  /**
-   * Simplified wrapper for controller compatibility
-   */
-  public async processTypebotSimple(
-    instance: any,
-    remoteJid: string,
-    bot: TypebotModel,
-    session: IntegrationSession,
-    settings: any,
-    content: string,
-    pushName?: string,
-    msg?: any,
-  ): Promise<void> {
-    return this.process(instance, remoteJid, bot, session, settings, content, pushName, msg);
-  }
-
-  /**
-   * Create a new TypeBot session with prefilled variables
-   */
   public async createNewSession(instance: Instance, data: any) {
     if (data.remoteJid === 'status@broadcast') return;
     const id = Math.floor(Math.random() * 10000000000).toString();
@@ -142,12 +77,8 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
             },
             awaitUser: false,
             botId: data.botId,
+            instanceId: instance.id,
             type: 'typebot',
-            Instance: {
-              connect: {
-                id: instance.id,
-              },
-            },
           },
         });
       }
@@ -158,11 +89,8 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
     }
   }
 
-  /**
-   * Send WhatsApp message with complex TypeBot formatting
-   */
   public async sendWAMessage(
-    instanceDb: Instance,
+    instance: Instance,
     session: IntegrationSession,
     settings: {
       expire: number;
@@ -178,107 +106,20 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
     input: any,
     clientSideActions: any,
   ) {
-    const waInstance = this.waMonitor.waInstances[instanceDb.name];
-    await this.processMessages(
-      waInstance,
+    processMessages(
+      this.waMonitor.waInstances[instance.name],
       session,
       settings,
       messages,
       input,
       clientSideActions,
-      this.applyFormatting.bind(this),
+      applyFormatting,
       this.prismaRepository,
     ).catch((err) => {
       console.error('Erro ao processar mensagens:', err);
     });
-  }
 
-  /**
-   * Apply rich text formatting for TypeBot messages
-   */
-  private applyFormatting(element: any): string {
-    let text = '';
-
-    if (element.text) {
-      text += element.text;
-    }
-
-    if (element.children && element.type !== 'a') {
-      for (const child of element.children) {
-        text += this.applyFormatting(child);
-      }
-    }
-
-    if (element.type === 'p' && element.type !== 'inline-variable') {
-      text = text.trim() + '\n';
-    }
-
-    if (element.type === 'inline-variable') {
-      text = text.trim();
-    }
-
-    if (element.type === 'ol') {
-      text =
-        '\n' +
-        text
-          .split('\n')
-          .map((line, index) => (line ? `${index + 1}. ${line}` : ''))
-          .join('\n');
-    }
-
-    if (element.type === 'li') {
-      text = text
-        .split('\n')
-        .map((line) => (line ? `  ${line}` : ''))
-        .join('\n');
-    }
-
-    let formats = '';
-
-    if (element.bold) {
-      formats += '*';
-    }
-
-    if (element.italic) {
-      formats += '_';
-    }
-
-    if (element.underline) {
-      formats += '~';
-    }
-
-    let formattedText = `${formats}${text}${formats.split('').reverse().join('')}`;
-
-    if (element.url) {
-      formattedText = element.children[0]?.text ? `[${formattedText}]\n(${element.url})` : `${element.url}`;
-    }
-
-    return formattedText;
-  }
-
-  /**
-   * Process TypeBot messages with full feature support
-   */
-  private async processMessages(
-    instance: any,
-    session: IntegrationSession,
-    settings: {
-      expire: number;
-      keywordFinish: string;
-      delayMessage: number;
-      unknownMessage: string;
-      listeningFromMe: boolean;
-      stopBotFromMe: boolean;
-      keepOpen: boolean;
-    },
-    messages: any,
-    input: any,
-    clientSideActions: any,
-    applyFormatting: any,
-    prismaRepository: PrismaRepository,
-  ) {
-    // Helper function to find wait time
-    const findItemAndGetSecondsToWait = (array: any[], targetId: string) => {
+    function findItemAndGetSecondsToWait(array, targetId) {
       if (!array) return null;
 
       for (const item of array) {
@@ -287,266 +128,452 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
         }
       }
       return null;
-    };
-
-    for (const message of messages) {
-      if (message.type === 'text') {
-        let formattedText = '';
-
-        for (const richText of message.content.richText) {
-          for (const element of richText.children) {
-            formattedText += applyFormatting(element);
-          }
-          formattedText += '\n';
-        }
-
-        formattedText = formattedText.replace(/\*\*/g, '').replace(/__/, '').replace(/~~/, '').replace(/\n$/, '');
-
-        formattedText = formattedText.replace(/\n$/, '');
-
-        if (formattedText.includes('[list]')) {
-          await this.processListMessage(instance, formattedText, session.remoteJid);
-        } else if (formattedText.includes('[buttons]')) {
-          await this.processButtonMessage(instance, formattedText, session.remoteJid);
-        } else {
-          await this.sendMessageWhatsApp(instance, session.remoteJid, formattedText, settings);
-        }
-
-        sendTelemetry('/message/sendText');
-      }
-
-      if (message.type === 'image') {
-        await instance.mediaMessage(
-          {
-            number: session.remoteJid.split('@')[0],
-            delay: settings?.delayMessage || 1000,
-            mediatype: 'image',
-            media: message.content.url,
-          },
-          null,
-          false,
-        );
-
-        sendTelemetry('/message/sendMedia');
-      }
-
-      if (message.type === 'video') {
-        await instance.mediaMessage(
-          {
-            number: session.remoteJid.split('@')[0],
-            delay: settings?.delayMessage || 1000,
-            mediatype: 'video',
-            media: message.content.url,
-          },
-          null,
-          false,
-        );
-
-        sendTelemetry('/message/sendMedia');
-      }
-
-      if (message.type === 'audio') {
-        await instance.audioWhatsapp(
-          {
-            number: session.remoteJid.split('@')[0],
-            delay: settings?.delayMessage || 1000,
-            encoding: true,
-            audio: message.content.url,
-          },
-          false,
-        );
-
-        sendTelemetry('/message/sendWhatsAppAudio');
-      }
-
-      const wait = findItemAndGetSecondsToWait(clientSideActions, message.id);
-
-      if (wait) {
-        await new Promise((resolve) => setTimeout(resolve, wait * 1000));
-      }
     }
 
-    // Process input choices
-    if (input) {
-      if (input.type === 'choice input') {
-        let formattedText = '';
+    function applyFormatting(element) {
+      let text = '';
 
-        const items = input.items;
-
-        for (const item of items) {
-          formattedText += `▶️ ${item.content}\n`;
-        }
-
-        formattedText = formattedText.replace(/\n$/, '');
-
-        if (formattedText.includes('[list]')) {
-          await this.processListMessage(instance, formattedText, session.remoteJid);
-        } else if (formattedText.includes('[buttons]')) {
-          await this.processButtonMessage(instance, formattedText, session.remoteJid);
-        } else {
-          await this.sendMessageWhatsApp(instance, session.remoteJid, formattedText, settings);
-        }
-
-        sendTelemetry('/message/sendText');
+      if (element.text) {
+        text += element.text;
       }
 
-      await prismaRepository.integrationSession.update({
-        where: {
-          id: session.id,
-        },
-        data: {
-          awaitUser: true,
-        },
-      });
-    } else {
-      if (!settings?.keepOpen) {
-        await prismaRepository.integrationSession.deleteMany({
-          where: {
-            id: session.id,
-          },
-        });
-      } else {
+      if (element.children && element.type !== 'a') {
+        for (const child of element.children) {
+          text += applyFormatting(child);
+        }
+      }
+
+      if (element.type === 'p' && element.type !== 'inline-variable') {
+        text = text.trim() + '\n';
+      }
+
+      if (element.type === 'inline-variable') {
+        text = text.trim();
+      }
+
+      if (element.type === 'ol') {
+        text =
+          '\n' +
+          text
+            .split('\n')
+            .map((line, index) => (line ? `${index + 1}. ${line}` : ''))
+            .join('\n');
+      }
+
+      if (element.type === 'li') {
+        text = text
+          .split('\n')
+          .map((line) => (line ? `  ${line}` : ''))
+          .join('\n');
+      }
+
+      let formats = '';
+
+      if (element.bold) {
+        formats += '*';
+      }
+
+      if (element.italic) {
+        formats += '_';
+      }
+
+      if (element.underline) {
+        formats += '~';
+      }
+
+      let formattedText = `${formats}${text}${formats.split('').reverse().join('')}`;
+
+      if (element.url) {
+        formattedText = element.children[0]?.text ? `[${formattedText}]\n(${element.url})` : `${element.url}`;
+      }
+
+      return formattedText;
+    }
+
+    async function processMessages(
+      instance: any,
+      session: IntegrationSession,
+      settings: {
+        expire: number;
+        keywordFinish: string;
+        delayMessage: number;
+        unknownMessage: string;
+        listeningFromMe: boolean;
+        stopBotFromMe: boolean;
+        keepOpen: boolean;
+      },
+      messages: any,
+      input: any,
+      clientSideActions: any,
+      applyFormatting: any,
+      prismaRepository: PrismaRepository,
+    ) {
+      for (const message of messages) {
+        if (message.type === 'text') {
+          let formattedText = '';
+
+          for (const richText of message.content.richText) {
+            for (const element of richText.children) {
+              formattedText += applyFormatting(element);
+            }
+            formattedText += '\n';
+          }
+
+          formattedText = formattedText.replace(/\*\*/g, '').replace(/__/, '').replace(/~~/, '').replace(/\n$/, '');
+
+          formattedText = formattedText.replace(/\n$/, '');
+
+          if (formattedText.includes('[list]')) {
+            const listJson = {
+              number: remoteJid.split('@')[0],
+              title: '',
+              description: '',
+              buttonText: '',
+              footerText: '',
+              sections: [],
+            };
+
+            const titleMatch = formattedText.match(/\[title\]([\s\S]*?)(?=\[description\])/);
+            const descriptionMatch = formattedText.match(/\[description\]([\s\S]*?)(?=\[buttonText\])/);
+            const buttonTextMatch = formattedText.match(/\[buttonText\]([\s\S]*?)(?=\[footerText\])/);
+            const footerTextMatch = formattedText.match(/\[footerText\]([\s\S]*?)(?=\[menu\])/);
+
+            if (titleMatch) listJson.title = titleMatch[1].trim();
+            if (descriptionMatch) listJson.description = descriptionMatch[1].trim();
+            if (buttonTextMatch) listJson.buttonText = buttonTextMatch[1].trim();
+            if (footerTextMatch) listJson.footerText = footerTextMatch[1].trim();
+
+            const menuContent = formattedText.match(/\[menu\]([\s\S]*?)\[\/menu\]/)?.[1];
+            if (menuContent) {
+              const sections = menuContent.match(/\[section\]([\s\S]*?)(?=\[section\]|\[\/section\]|\[\/menu\])/g);
+              if (sections) {
+                sections.forEach((section) => {
+                  const sectionTitle = section.match(/title: (.*?)(?:\n|$)/)?.[1]?.trim();
+                  const rows = section.match(/\[row\]([\s\S]*?)(?=\[row\]|\[\/row\]|\[\/section\]|\[\/menu\])/g);
+
+                  const sectionData = {
+                    title: sectionTitle,
+                    rows:
+                      rows?.map((row) => ({
+                        title: row.match(/title: (.*?)(?:\n|$)/)?.[1]?.trim(),
+                        description: row.match(/description: (.*?)(?:\n|$)/)?.[1]?.trim(),
+                        rowId: row.match(/rowId: (.*?)(?:\n|$)/)?.[1]?.trim(),
+                      })) || [],
+                  };
+
+                  listJson.sections.push(sectionData);
+                });
+              }
+            }
+
+            await instance.listMessage(listJson);
+          } else if (formattedText.includes('[buttons]')) {
+            const buttonJson = {
+              number: remoteJid.split('@')[0],
+              thumbnailUrl: undefined,
+              title: '',
+              description: '',
+              footer: '',
+              buttons: [],
+            };
+
+            const thumbnailUrlMatch = formattedText.match(/\[thumbnailUrl\]([\s\S]*?)(?=\[title\])/);
+            const titleMatch = formattedText.match(/\[title\]([\s\S]*?)(?=\[description\])/);
+            const descriptionMatch = formattedText.match(/\[description\]([\s\S]*?)(?=\[footer\])/);
+            const footerMatch = formattedText.match(/\[footer\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url))/);
+
+            if (titleMatch) buttonJson.title = titleMatch[1].trim();
+            if (thumbnailUrlMatch) buttonJson.thumbnailUrl = thumbnailUrlMatch[1].trim();
+            if (descriptionMatch) buttonJson.description = descriptionMatch[1].trim();
+            if (footerMatch) buttonJson.footer = footerMatch[1].trim();
+
+            const buttonTypes = {
+              reply: /\[reply\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url)|$)/g,
+              pix: /\[pix\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url)|$)/g,
+              copy: /\[copy\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url)|$)/g,
+              call: /\[call\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url)|$)/g,
+              url: /\[url\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url)|$)/g,
+            };
+
+            for (const [type, pattern] of Object.entries(buttonTypes)) {
+              let match;
+              while ((match = pattern.exec(formattedText)) !== null) {
+                const content = match[1].trim();
+                const button: any = { type };
+
+                switch (type) {
+                  case 'pix':
+                    button.currency = content.match(/currency: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    button.name = content.match(/name: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    button.keyType = content.match(/keyType: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    button.key = content.match(/key: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    break;
+
+                  case 'reply':
+                    button.displayText = content.match(/displayText: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    button.id = content.match(/id: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    break;
+
+                  case 'copy':
+                    button.displayText = content.match(/displayText: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    button.copyCode = content.match(/copyCode: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    break;
+
+                  case 'call':
+                    button.displayText = content.match(/displayText: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    button.phoneNumber = content.match(/phone: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    break;
+
+                  case 'url':
+                    button.displayText = content.match(/displayText: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    button.url = content.match(/url: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    break;
+                }
+
+                if (Object.keys(button).length > 1) {
+                  buttonJson.buttons.push(button);
+                }
+              }
+            }
+
+            await instance.buttonMessage(buttonJson);
+          } else {
+            await instance.textMessage(
+              {
+                number: remoteJid.split('@')[0],
+                delay: settings?.delayMessage || 1000,
+                text: formattedText,
+              },
+              false,
+            );
+          }
+
+          sendTelemetry('/message/sendText');
+        }
+
+        if (message.type === 'image') {
+          await instance.mediaMessage(
+            {
+              number: remoteJid.split('@')[0],
+              delay: settings?.delayMessage || 1000,
+              mediatype: 'image',
+              media: message.content.url,
+            },
+            null,
+            false,
+          );
+
+          sendTelemetry('/message/sendMedia');
+        }
+
+        if (message.type === 'video') {
+          await instance.mediaMessage(
+            {
+              number: remoteJid.split('@')[0],
+              delay: settings?.delayMessage || 1000,
+              mediatype: 'video',
+              media: message.content.url,
+            },
+            null,
+            false,
+          );
+
+          sendTelemetry('/message/sendMedia');
+        }
+
+        if (message.type === 'audio') {
+          await instance.audioWhatsapp(
+            {
+              number: remoteJid.split('@')[0],
+              delay: settings?.delayMessage || 1000,
+              encoding: true,
+              audio: message.content.url,
+            },
+            false,
+          );
+
+          sendTelemetry('/message/sendWhatsAppAudio');
+        }
+
+        const wait = findItemAndGetSecondsToWait(clientSideActions, message.id);
+
+        if (wait) {
+          await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+        }
+      }
+
+      console.log('input', input);
+      if (input) {
+        if (input.type === 'choice input') {
+          let formattedText = '';
+
+          const items = input.items;
+
+          for (const item of items) {
+            formattedText += `▶️ ${item.content}\n`;
+          }
+
+          formattedText = formattedText.replace(/\n$/, '');
+
+          if (formattedText.includes('[list]')) {
+            const listJson = {
+              number: remoteJid.split('@')[0],
+              title: '',
+              description: '',
+              buttonText: '',
+              footerText: '',
+              sections: [],
+            };
+
+            const titleMatch = formattedText.match(/\[title\]([\s\S]*?)(?=\[description\])/);
+            const descriptionMatch = formattedText.match(/\[description\]([\s\S]*?)(?=\[buttonText\])/);
+            const buttonTextMatch = formattedText.match(/\[buttonText\]([\s\S]*?)(?=\[footerText\])/);
+            const footerTextMatch = formattedText.match(/\[footerText\]([\s\S]*?)(?=\[menu\])/);
+
+            if (titleMatch) listJson.title = titleMatch[1].trim();
+            if (descriptionMatch) listJson.description = descriptionMatch[1].trim();
+            if (buttonTextMatch) listJson.buttonText = buttonTextMatch[1].trim();
+            if (footerTextMatch) listJson.footerText = footerTextMatch[1].trim();
+
+            const menuContent = formattedText.match(/\[menu\]([\s\S]*?)\[\/menu\]/)?.[1];
+            if (menuContent) {
+              const sections = menuContent.match(/\[section\]([\s\S]*?)(?=\[section\]|\[\/section\]|\[\/menu\])/g);
+              if (sections) {
+                sections.forEach((section) => {
+                  const sectionTitle = section.match(/title: (.*?)(?:\n|$)/)?.[1]?.trim();
+                  const rows = section.match(/\[row\]([\s\S]*?)(?=\[row\]|\[\/row\]|\[\/section\]|\[\/menu\])/g);
+
+                  const sectionData = {
+                    title: sectionTitle,
+                    rows:
+                      rows?.map((row) => ({
+                        title: row.match(/title: (.*?)(?:\n|$)/)?.[1]?.trim(),
+                        description: row.match(/description: (.*?)(?:\n|$)/)?.[1]?.trim(),
+                        rowId: row.match(/rowId: (.*?)(?:\n|$)/)?.[1]?.trim(),
+                      })) || [],
+                  };
+
+                  listJson.sections.push(sectionData);
+                });
+              }
+            }
+
+            await instance.listMessage(listJson);
+          } else if (formattedText.includes('[buttons]')) {
+            const buttonJson = {
+              number: remoteJid.split('@')[0],
+              thumbnailUrl: undefined,
+              title: '',
+              description: '',
+              footer: '',
+              buttons: [],
+            };
+
+            const thumbnailUrlMatch = formattedText.match(/\[thumbnailUrl\]([\s\S]*?)(?=\[title\])/);
+            const titleMatch = formattedText.match(/\[title\]([\s\S]*?)(?=\[description\])/);
+            const descriptionMatch = formattedText.match(/\[description\]([\s\S]*?)(?=\[footer\])/);
+            const footerMatch = formattedText.match(/\[footer\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url))/);
+
+            if (titleMatch) buttonJson.title = titleMatch[1].trim();
+            if (thumbnailUrlMatch) buttonJson.thumbnailUrl = thumbnailUrlMatch[1].trim();
+            if (descriptionMatch) buttonJson.description = descriptionMatch[1].trim();
+            if (footerMatch) buttonJson.footer = footerMatch[1].trim();
+
+            const buttonTypes = {
+              reply: /\[reply\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url)|$)/g,
+              pix: /\[pix\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url)|$)/g,
+              copy: /\[copy\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url)|$)/g,
+              call: /\[call\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url)|$)/g,
+              url: /\[url\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url)|$)/g,
+            };
+
+            for (const [type, pattern] of Object.entries(buttonTypes)) {
+              let match;
+              while ((match = pattern.exec(formattedText)) !== null) {
+                const content = match[1].trim();
+                const button: any = { type };
+
+                switch (type) {
+                  case 'pix':
+                    button.currency = content.match(/currency: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    button.name = content.match(/name: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    button.keyType = content.match(/keyType: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    button.key = content.match(/key: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    break;
+
+                  case 'reply':
+                    button.displayText = content.match(/displayText: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    button.id = content.match(/id: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    break;
+
+                  case 'copy':
+                    button.displayText = content.match(/displayText: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    button.copyCode = content.match(/copyCode: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    break;
+
+                  case 'call':
+                    button.displayText = content.match(/displayText: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    button.phoneNumber = content.match(/phone: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    break;
+
+                  case 'url':
+                    button.displayText = content.match(/displayText: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    button.url = content.match(/url: (.*?)(?:\n|$)/)?.[1]?.trim();
+                    break;
+                }
+
+                if (Object.keys(button).length > 1) {
+                  buttonJson.buttons.push(button);
+                }
+              }
+            }
+
+            await instance.buttonMessage(buttonJson);
+          } else {
+            await instance.textMessage(
+              {
+                number: remoteJid.split('@')[0],
+                delay: settings?.delayMessage || 1000,
+                text: formattedText,
+              },
+              false,
+            );
+          }
+
+          sendTelemetry('/message/sendText');
+        }
+
         await prismaRepository.integrationSession.update({
           where: {
             id: session.id,
           },
           data: {
-            status: 'closed',
+            awaitUser: true,
           },
         });
-      }
-    }
-  }
-
-  /**
-   * Process list messages for WhatsApp
-   */
-  private async processListMessage(instance: any, formattedText: string, remoteJid: string) {
-    const listJson = {
-      number: remoteJid.split('@')[0],
-      title: '',
-      description: '',
-      buttonText: '',
-      footerText: '',
-      sections: [],
-    };
-
-    const titleMatch = formattedText.match(/\[title\]([\s\S]*?)(?=\[description\])/);
-    const descriptionMatch = formattedText.match(/\[description\]([\s\S]*?)(?=\[buttonText\])/);
-    const buttonTextMatch = formattedText.match(/\[buttonText\]([\s\S]*?)(?=\[footerText\])/);
-    const footerTextMatch = formattedText.match(/\[footerText\]([\s\S]*?)(?=\[menu\])/);
-
-    if (titleMatch) listJson.title = titleMatch[1].trim();
-    if (descriptionMatch) listJson.description = descriptionMatch[1].trim();
-    if (buttonTextMatch) listJson.buttonText = buttonTextMatch[1].trim();
-    if (footerTextMatch) listJson.footerText = footerTextMatch[1].trim();
-
-    const menuContent = formattedText.match(/\[menu\]([\s\S]*?)\[\/menu\]/)?.[1];
-    if (menuContent) {
-      const sections = menuContent.match(/\[section\]([\s\S]*?)(?=\[section\]|\[\/section\]|\[\/menu\])/g);
-      if (sections) {
-        sections.forEach((section) => {
-          const sectionTitle = section.match(/title: (.*?)(?:\n|$)/)?.[1]?.trim();
-          const rows = section.match(/\[row\]([\s\S]*?)(?=\[row\]|\[\/row\]|\[\/section\]|\[\/menu\])/g);
-
-          const sectionData = {
-            title: sectionTitle,
-            rows:
-              rows?.map((row) => ({
-                title: row.match(/title: (.*?)(?:\n|$)/)?.[1]?.trim(),
-                description: row.match(/description: (.*?)(?:\n|$)/)?.[1]?.trim(),
-                rowId: row.match(/rowId: (.*?)(?:\n|$)/)?.[1]?.trim(),
-              })) || [],
-          };
-
-          listJson.sections.push(sectionData);
-        });
-      }
-    }
-
-    await instance.listMessage(listJson);
-  }
-
-  /**
-   * Process button messages for WhatsApp
-   */
-  private async processButtonMessage(instance: any, formattedText: string, remoteJid: string) {
-    const buttonJson = {
-      number: remoteJid.split('@')[0],
-      thumbnailUrl: undefined,
-      title: '',
-      description: '',
-      footer: '',
-      buttons: [],
-    };
-
-    const thumbnailUrlMatch = formattedText.match(/\[thumbnailUrl\]([\s\S]*?)(?=\[title\])/);
-    const titleMatch = formattedText.match(/\[title\]([\s\S]*?)(?=\[description\])/);
-    const descriptionMatch = formattedText.match(/\[description\]([\s\S]*?)(?=\[footer\])/);
-    const footerMatch = formattedText.match(/\[footer\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url))/);
-
-    if (titleMatch) buttonJson.title = titleMatch[1].trim();
-    if (thumbnailUrlMatch) buttonJson.thumbnailUrl = thumbnailUrlMatch[1].trim();
-    if (descriptionMatch) buttonJson.description = descriptionMatch[1].trim();
-    if (footerMatch) buttonJson.footer = footerMatch[1].trim();
-
-    const buttonTypes = {
-      reply: /\[reply\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url)|$)/g,
-      pix: /\[pix\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url)|$)/g,
-      copy: /\[copy\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url)|$)/g,
-      call: /\[call\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url)|$)/g,
-      url: /\[url\]([\s\S]*?)(?=\[(?:reply|pix|copy|call|url)|$)/g,
-    };
-
-    for (const [type, pattern] of Object.entries(buttonTypes)) {
-      let match;
-      while ((match = pattern.exec(formattedText)) !== null) {
-        const content = match[1].trim();
-        const button: any = { type };
-
-        switch (type) {
-          case 'pix':
-            button.currency = content.match(/currency: (.*?)(?:\n|$)/)?.[1]?.trim();
-            button.name = content.match(/name: (.*?)(?:\n|$)/)?.[1]?.trim();
-            button.keyType = content.match(/keyType: (.*?)(?:\n|$)/)?.[1]?.trim();
-            button.key = content.match(/key: (.*?)(?:\n|$)/)?.[1]?.trim();
-            break;
-
-          case 'reply':
-            button.displayText = content.match(/displayText: (.*?)(?:\n|$)/)?.[1]?.trim();
-            button.id = content.match(/id: (.*?)(?:\n|$)/)?.[1]?.trim();
-            break;
-
-          case 'copy':
-            button.displayText = content.match(/displayText: (.*?)(?:\n|$)/)?.[1]?.trim();
-            button.copyCode = content.match(/copyCode: (.*?)(?:\n|$)/)?.[1]?.trim();
-            break;
-
-          case 'call':
-            button.displayText = content.match(/displayText: (.*?)(?:\n|$)/)?.[1]?.trim();
-            button.phoneNumber = content.match(/phone: (.*?)(?:\n|$)/)?.[1]?.trim();
-            break;
-
-          case 'url':
-            button.displayText = content.match(/displayText: (.*?)(?:\n|$)/)?.[1]?.trim();
-            button.url = content.match(/url: (.*?)(?:\n|$)/)?.[1]?.trim();
-            break;
-        }
-
-        if (Object.keys(button).length > 1) {
-          buttonJson.buttons.push(button);
+      } else {
+        if (!settings?.keepOpen) {
+          await prismaRepository.integrationSession.deleteMany({
+            where: {
+              id: session.id,
+            },
+          });
+        } else {
+          await prismaRepository.integrationSession.update({
+            where: {
+              id: session.id,
+            },
+            data: {
+              status: 'closed',
+            },
+          });
         }
       }
     }
-
-    await instance.buttonMessage(buttonJson);
   }
 
-  /**
-   * Original TypeBot processing method with full functionality
-   */
   public async processTypebot(
-    waInstance: any,
+    instance: Instance,
     remoteJid: string,
     msg: Message,
     session: IntegrationSession,
@@ -563,22 +590,13 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
     content: string,
     prefilledVariables?: any,
   ) {
-    // Get the database instance record
-    const instance = await this.prismaRepository.instance.findFirst({
-      where: {
-        name: waInstance.instanceName,
-      },
-    });
-
-    if (!instance) {
-      this.logger.error('Instance not found in database');
-      return;
-    }
-    // Handle session expiration
     if (session && expire && expire > 0) {
       const now = Date.now();
+
       const sessionUpdatedAt = new Date(session.updatedAt).getTime();
+
       const diff = now - sessionUpdatedAt;
+
       const diffInMinutes = Math.floor(diff / 1000 / 60);
 
       if (diffInMinutes > expire) {
@@ -615,24 +633,24 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
           prefilledVariables: prefilledVariables,
         });
 
-        if (data?.session) {
+        if (data.session) {
           session = data.session;
         }
 
-        if (!data?.messages || data.messages.length === 0) {
+        if (data.messages.length === 0) {
           const content = getConversationMessage(msg.message);
 
           if (!content) {
             if (unknownMessage) {
-              await this.sendMessageWhatsApp(waInstance, remoteJid, unknownMessage, {
-                delayMessage,
-                expire,
-                keywordFinish,
-                listeningFromMe,
-                stopBotFromMe,
-                keepOpen,
-                unknownMessage,
-              });
+              this.waMonitor.waInstances[instance.name].textMessage(
+                {
+                  number: remoteJid.split('@')[0],
+                  delay: delayMessage || 1000,
+                  text: unknownMessage,
+                },
+                false,
+              );
+
               sendTelemetry('/message/sendText');
             }
             return;
@@ -664,7 +682,7 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
             let urlTypebot: string;
             let reqData: {};
             if (version === 'latest') {
-              urlTypebot = `${url}/api/v1/sessions/${data?.sessionId}/continueChat`;
+              urlTypebot = `${url}/api/v1/sessions/${data.sessionId}/continueChat`;
               reqData = {
                 message: content,
               };
@@ -672,7 +690,7 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
               urlTypebot = `${url}/api/v1/sendMessage`;
               reqData = {
                 message: content,
-                sessionId: data?.sessionId,
+                sessionId: data.sessionId,
               };
             }
 
@@ -691,9 +709,9 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
                 keepOpen: keepOpen,
               },
               remoteJid,
-              request?.data?.messages,
-              request?.data?.input,
-              request?.data?.clientSideActions,
+              request.data.messages,
+              request.data.input,
+              request.data.clientSideActions,
             );
           } catch (error) {
             this.logger.error(error);
@@ -701,25 +719,23 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
           }
         }
 
-        if (data?.messages && data.messages.length > 0) {
-          await this.sendWAMessage(
-            instance,
-            session,
-            {
-              expire: expire,
-              keywordFinish: keywordFinish,
-              delayMessage: delayMessage,
-              unknownMessage: unknownMessage,
-              listeningFromMe: listeningFromMe,
-              stopBotFromMe: stopBotFromMe,
-              keepOpen: keepOpen,
-            },
-            remoteJid,
-            data.messages,
-            data.input,
-            data.clientSideActions,
-          );
-        }
+        await this.sendWAMessage(
+          instance,
+          session,
+          {
+            expire: expire,
+            keywordFinish: keywordFinish,
+            delayMessage: delayMessage,
+            unknownMessage: unknownMessage,
+            listeningFromMe: listeningFromMe,
+            stopBotFromMe: stopBotFromMe,
+            keepOpen: keepOpen,
+          },
+          remoteJid,
+          data.messages,
+          data.input,
+          data.clientSideActions,
+        );
 
         return;
       }
@@ -729,7 +745,6 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
       return;
     }
 
-    // Handle new sessions
     if (!session) {
       const data = await this.createNewSession(instance, {
         enabled: findTypebot?.enabled,
@@ -750,38 +765,36 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
         session = data.session;
       }
 
-      if (data?.messages && data.messages.length > 0) {
-        await this.sendWAMessage(
-          instance,
-          session,
-          {
-            expire: expire,
-            keywordFinish: keywordFinish,
-            delayMessage: delayMessage,
-            unknownMessage: unknownMessage,
-            listeningFromMe: listeningFromMe,
-            stopBotFromMe: stopBotFromMe,
-            keepOpen: keepOpen,
-          },
-          remoteJid,
-          data.messages,
-          data.input,
-          data.clientSideActions,
-        );
-      }
+      await this.sendWAMessage(
+        instance,
+        session,
+        {
+          expire: expire,
+          keywordFinish: keywordFinish,
+          delayMessage: delayMessage,
+          unknownMessage: unknownMessage,
+          listeningFromMe: listeningFromMe,
+          stopBotFromMe: stopBotFromMe,
+          keepOpen: keepOpen,
+        },
+        remoteJid,
+        data?.messages,
+        data?.input,
+        data?.clientSideActions,
+      );
 
-      if (!data?.messages || data.messages.length === 0) {
+      if (data.messages.length === 0) {
         if (!content) {
           if (unknownMessage) {
-            await this.sendMessageWhatsApp(waInstance, remoteJid, unknownMessage, {
-              delayMessage,
-              expire,
-              keywordFinish,
-              listeningFromMe,
-              stopBotFromMe,
-              keepOpen,
-              unknownMessage,
-            });
+            this.waMonitor.waInstances[instance.name].textMessage(
+              {
+                number: remoteJid.split('@')[0],
+                delay: delayMessage || 1000,
+                text: unknownMessage,
+              },
+              false,
+            );
+
             sendTelemetry('/message/sendText');
           }
           return;
@@ -815,7 +828,7 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
           let urlTypebot: string;
           let reqData: {};
           if (version === 'latest') {
-            urlTypebot = `${url}/api/v1/sessions/${data?.sessionId}/continueChat`;
+            urlTypebot = `${url}/api/v1/sessions/${data.sessionId}/continueChat`;
             reqData = {
               message: content,
             };
@@ -823,7 +836,7 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
             urlTypebot = `${url}/api/v1/sendMessage`;
             reqData = {
               message: content,
-              sessionId: data?.sessionId,
+              sessionId: data.sessionId,
             };
           }
           request = await axios.post(urlTypebot, reqData);
@@ -841,9 +854,9 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
               keepOpen: keepOpen,
             },
             remoteJid,
-            request?.data?.messages,
-            request?.data?.input,
-            request?.data?.clientSideActions,
+            request.data.messages,
+            request.data.input,
+            request.data.clientSideActions,
           );
         } catch (error) {
           this.logger.error(error);
@@ -853,7 +866,6 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
       return;
     }
 
-    // Update existing session
     await this.prismaRepository.integrationSession.update({
       where: {
         id: session.id,
@@ -866,15 +878,15 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
 
     if (!content) {
       if (unknownMessage) {
-        await this.sendMessageWhatsApp(waInstance, remoteJid, unknownMessage, {
-          delayMessage,
-          expire,
-          keywordFinish,
-          listeningFromMe,
-          stopBotFromMe,
-          keepOpen,
-          unknownMessage,
-        });
+        this.waMonitor.waInstances[instance.name].textMessage(
+          {
+            number: remoteJid.split('@')[0],
+            delay: delayMessage || 1000,
+            text: unknownMessage,
+          },
+          false,
+        );
+
         sendTelemetry('/message/sendText');
       }
       return;
@@ -901,10 +913,9 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
       return;
     }
 
-    // Continue existing chat
     const version = this.configService.get<Typebot>('TYPEBOT').API_VERSION;
     let urlTypebot: string;
-    let reqData: { message: string; sessionId?: string };
+    let reqData: {};
     if (version === 'latest') {
       urlTypebot = `${url}/api/v1/sessions/${session.sessionId.split('-')[1]}/continueChat`;
       reqData = {
@@ -917,20 +928,6 @@ export class TypebotService extends BaseChatbotService<TypebotModel, any> {
         sessionId: session.sessionId.split('-')[1],
       };
     }
-
-    // Handle audio transcription if OpenAI service is available
-    if (this.isAudioMessage(content) && msg) {
-      try {
-        this.logger.debug(`[TypeBot] Downloading audio for Whisper transcription`);
-        const transcription = await this.openaiService.speechToText(msg, instance);
-        if (transcription) {
-          reqData.message = `[audio] ${transcription}`;
-        }
-      } catch (err) {
-        this.logger.error(`[TypeBot] Failed to transcribe audio: ${err}`);
-      }
-    }
-
     const request = await axios.post(urlTypebot, reqData);
 
     await this.sendWAMessage(

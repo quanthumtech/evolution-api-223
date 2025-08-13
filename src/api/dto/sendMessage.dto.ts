@@ -44,7 +44,6 @@ export class Metadata {
   mentionsEveryOne?: boolean;
   mentioned?: string[];
   encoding?: boolean;
-  notConvertSticker?: boolean;
 }
 
 export class SendTextDto extends Metadata {

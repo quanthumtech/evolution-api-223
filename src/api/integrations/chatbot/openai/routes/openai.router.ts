@@ -153,7 +153,7 @@ export class OpenaiRouter extends RouterBroker {
           request: req,
           schema: instanceSchema,
           ClassRef: InstanceDto,
-          execute: (instance) => openaiController.getModels(instance, req.query.openaiCredsId as string),
+          execute: (instance) => openaiController.getModels(instance),
         });
 
         res.status(HttpStatus.OK).json(response);
